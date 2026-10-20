@@ -2,29 +2,26 @@
   (:require-macros [cljs.core.async.macros :refer [go]])
   (:require [clojure.set]
             [reagent.core :as r] 
-            [reagent.dom :as rdom]
-            [reagent.dom.server]
+            [reagent.dom.client :as rdomc]
             [react]
             [cljs-http.client :as http]
             [cljs.core.async :refer [<!]]
-            [ag-grid-react :as ag-grid]
-            [ag-charts-react :as ag-chart]
+            [ag-grid-community :refer [ModuleRegistry AllCommunityModule]]
+            [ag-grid-react :refer [AgGridReact]]
             [cljs.pprint :refer [pprint]]))
 
 (defonce db (r/atom {}))
 
-(def app-version "v0.1.0")
+(def app-version "v1.0.0")
 
-(def url-prefix "")
-
-
-(defn mean [coll]
+(defn mean
   "Calculate the artithmetic mean of a collection of numbers"
+  [coll]
   (/ (reduce + coll) (count coll)))
 
 
 (defn round-number
-  ""
+  "Round a number"
   [f]
   (/ (.round js/Math (* 100 f)) 100))
 
@@ -35,26 +32,29 @@
   (some #(= elem %) coll))
 
 
-(defn load-sequencing-runs []
-  ""
+(defn load-sequencing-runs
+  "Load sequencing runs."
+  []
   (go
-    (let [response (<! (http/get (str url-prefix "data/runs.json")))]
+    (let [response (<! (http/get "data/runs.json"))]
       (swap! db assoc-in [:runs] (:body response)))))
 
 
-(defn load-library-qc [run-id]
-  ""
+(defn load-library-qc
+  "Load library qc for a sequencing run."
+  [run-id]
   (go
-    (let [response (<! (http/get (str url-prefix "data/library-qc/" run-id "_library_qc.json")))]
-      (if (= 200 (:status response))
+    (let [response (<! (http/get  "data/library-qc/" run-id "_library_qc.json"))]
+      (when (= 200 (:status response))
         (swap! db assoc-in [:library-qc run-id] (:body response))))))
 
 
-(defn load-species-abundance [run-id]
-  ""
+(defn load-species-abundance
+  "Load species abundance info for a sequencing run."
+  [run-id]
   (go
-    (let [response (<! (http/get (str url-prefix "data/species-abundance/" run-id "_species_abundance.json")))]
-      (if (= 200 (:status response))
+    (let [response (<! (http/get "data/species-abundance/" run-id "_species_abundance.json"))]
+      (when (= 200 (:status response))
         (swap! db assoc-in [:species-abundance run-id] (:body response))))))
 
 
@@ -78,7 +78,7 @@
                   :align-items "center"}}
     [:h1 {:style {:font-family "Arial" :color "#004a87" :margin "0px"}} "Routine Nanopore QC"][:p {:style {:font-family "Arial" :color "grey" :justify-self "start"}} app-version]]
    [:div {:style {:display "grid" :align-self "center" :justify-self "end"}}
-    [:img {:src (str url-prefix "/images/bccdc_logo.svg") :height "48px"}]]])
+    [:img {:src "/images/logo.svg" :height "48px"}]]])
 
 
 (defn get-selected-rows [e]
@@ -88,19 +88,28 @@
            .getSelectedNodes)))
 
 
-(defn run-selected [e]
-  ""
+(defn run-selected
+  "Callback for when a run is selected"
+  [e]
   (let [previously-selected-run-ids (:selected-run-ids @db)
         currently-selected-run-id (:run_id (first (get-selected-rows e)))]
-    (do
-      (load-library-qc currently-selected-run-id)
-      (load-species-abundance currently-selected-run-id)
-      (swap! db assoc-in [:selected-run-id] currently-selected-run-id))))
+    (load-library-qc currently-selected-run-id)
+    (load-species-abundance currently-selected-run-id)
+    (swap! db assoc-in [:selected-run-id] currently-selected-run-id)))
 
 
 (defn cell-renderer-hyperlink-button [text params]
   (str "<button><a href=\"" (.-value params) "\" style=\"color: inherit; text-decoration: inherit\" target=\"_blank\">" text "</a></button>"))
 
+
+;; AG-Grid Components
+(def ag-grid-react (r/adapt-react-class AgGridReact))
+
+(def nanopore-runs-column-defs
+  [{:field "run_id"
+    :headerName "Run ID"
+    :minWidth 200
+    :sort "desc"}])
 
 (defn nanopore-runs-table []
   (let [runs (:runs @db)
@@ -108,63 +117,133 @@
                       identity)]
     [:div {:class "ag-theme-balham"
            :style {}}
-     [:> ag-grid/AgGridReact
-      {:rowData row-data
+     [ag-grid-react
+      {:defaultColDef {:sortable  true
+                       :resizable true
+                       :minWidth  80
+                       :maxWidth 200}
+       :rowData row-data
        :pagination false
-       :floatingFilter true
-       :rowSelection "single"
+       :theme "legacy"
+       :rowSelection {:mode "singleRow"
+                      :checkboxes true}
        :enableCellTextSelection true
        :onFirstDataRendered #(-> % .-api .sizeColumnsToFit)
-       :onSelectionChanged run-selected}
-      [:> ag-grid/AgGridColumn {:field "run_id" :headerName "Run ID" :minWidth 200 :resizable true :filter "agTextColumnFilter" :sortable true :checkboxSelection true :sort "desc"}]]]))
+       :onSelectionChanged run-selected}]]))
 
 
+(def library-sequence-qc-column-defs
+  [{:field "library_id"
+    :headerName "Library ID"
+    :maxWidth 200}
+   {:field "project_id"
+    :headerName "Project ID"
+    :maxWidth 200}
+   {:field "inferred_genus_name"
+    :headerName "Inferred Genus"
+    :maxWidth 200}
+   {:field "inferred_species_name"
+    :headerName "Inferred Species"
+    :maxWidth 200}
+   {:field "inferred_genus_percent"
+    :headerName "Genus Reads (%)"
+    :maxWidth 160
+    :filter "agNumberColumnFilter"
+    :type "numericColumn"}
+   {:field "inferred_species_percent"
+    :headerName "Species Reads (%)"
+    :maxWidth 160
+    :filter "agNumberColumnFilter"
+    :type "numericColumn"}
+   {:field "inferred_species_genome_size_mb"
+    :headerName "Genome Size (Mb)"
+    :maxWidth 140
+    :filter "agNumberColumnFilter"
+    :type "numericColumn"}
+   {:field "num_reads"
+    :headerName "Num. Reads"
+    :maxWidth 140
+    :filter "agNumberColumnFilter"
+    :type "numericColumn"}
+   {:field "num_bases"
+    :headerName "Total Bases (Mb)"
+    :maxWidth 140
+    :filter "agNumberColumnFilter"
+    :type "numericColumn"}
+   {:field "read_n50"
+    :headerName "Read N50"
+    :maxWidth 160
+    :filter "agNumberColumnFilter"
+    :type "numericColumn"}
+   {:field "inferred_genus_estimated_depth"
+    :headerName "Est. Genus Coverage"
+    :maxWidth 172
+    :filter "agNumberColumnFilter"
+    :type "numericColumn"}
+   {:field "inferred_species_estimated_depth"
+    :headerName "Est. Species Coverage"
+    :maxWidth 172
+    :filter "agNumberColumnFilter"
+    :type "numericColumn"}
+   ]
+  )
 
 (defn library-sequence-qc-table []
-  (let [grid-ref (clj->js {:current nil})
-        currently-selected-run-id (:selected-run-id @db)
+  (let [currently-selected-run-id (:selected-run-id @db)
         selected-run-library-qc (get-in @db [:library-qc currently-selected-run-id])
         row-data (->> selected-run-library-qc
                       (map (fn [x] (update x :inferred_genus_percent #(if % (.toFixed % 2) nil))))
                       (map (fn [x] (update x :inferred_species_percent #(if % (.toFixed % 2) nil))))
-                      (map (fn [x] (update x :num_bases #(if % (.toFixed (/ % 1000000) 3)))))
+                      (map (fn [x] (update x :num_bases #(when % (.toFixed (/ % 1000000) 3)))))
                       (map (fn [x] (update x :inferred_species_genome_size_mb #(if % (.toFixed % 1) nil))))
                       (map (fn [x] (update x :inferred_genus_estimated_depth #(if % (.toFixed % 2) nil))))
                       (map (fn [x] (update x :inferred_species_estimated_depth #(if % (.toFixed % 2) nil)))))]
-    [:div {:style {:display "grid"
-                   :grid-template-columns "1fr"
-                   :grid-template-rows "11fr 1fr"}}
      [:div {:class "ag-theme-balham"
-            :style {:grid-row "1"}}
-     [:> ag-grid/AgGridReact
-      {:ref grid-ref
+            :style {}}
+     [ag-grid-react
+      {:defaultColDef {:sortable  true
+                       :resizable true
+                       :minWidth  80
+                       :maxWidth 200}
+       :columnDefs library-sequence-qc-column-defs
        :rowData row-data
        :pagination false
+       :theme "legacy"
        :enableCellTextSelection true
        :onFirstDataRendered #(-> % .-api .sizeColumnsToFit)
        :onSelectionChanged #()}
-      [:> ag-grid/AgGridColumn {:field "library_id" :headerName "Library ID" :maxWidth 200 :sortable true :resizable true :filter "agTextColumnFilter" :pinned "left" :checkboxSelection false :headerCheckboxSelectionFilteredOnly true :floatingFilter true}]
-      [:> ag-grid/AgGridColumn {:field "project_id" :headerName "Project ID" :maxWidth 200 :sortable true :resizable true :filter "agTextColumnFilter" :floatingFilter true}]
-      [:> ag-grid/AgGridColumn {:field "inferred_genus_name" :headerName "Inferred Genus" :maxWidth 200 :sortable true :resizable true :filter "agTextColumnFilter" :floatingFilter true}]
-      [:> ag-grid/AgGridColumn {:field "inferred_species_name" :headerName "Inferred Species" :maxWidth 200 :sortable true :resizable true :filter "agTextColumnFilter" :floatingFilter true}]
-      [:> ag-grid/AgGridColumn {:field "inferred_genus_percent" :maxWidth 160 :headerName "Genus Reads (%)" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn" :floatingFilter true}]
-      [:> ag-grid/AgGridColumn {:field "inferred_species_percent" :maxWidth 160 :headerName "Species Reads (%)" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn" :floatingFilter true}]
-      [:> ag-grid/AgGridColumn {:field "inferred_species_genome_size_mb" :maxWidth 140 :headerName "Genome Size (Mb)" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]
-      [:> ag-grid/AgGridColumn {:field "num_reads" :maxWidth 140 :headerName "Num. Reads" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]
-      [:> ag-grid/AgGridColumn {:field "num_bases" :maxWidth 140 :headerName "Total Bases (Mb)" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]
-      [:> ag-grid/AgGridColumn {:field "read_n50" :maxWidth 160 :headerName "Read N50" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]
-      [:> ag-grid/AgGridColumn {:field "inferred_genus_estimated_depth" :maxWidth 172 :headerName "Est. Genus Coverage" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]
-      [:> ag-grid/AgGridColumn {:field "inferred_species_estimated_depth" :maxWidth 172 :headerName "Est. Species Coverage" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]
-      ]]
-     [:div {:style {:grid-row "2"}}
-      [:button {:onClick #(.exportDataAsCsv (.-api (.-current grid-ref)) (clj->js {:fileName (str currently-selected-run-id "_library_qc.csv")}))} "Export CSV"]]
-     ]
-     ))
+      ]]))
 
+(def library-species-abundance-column-defs
+  [{:field "library_id" 
+    :headerName "Library ID" 
+    :filter "agTextColumnFilter" 
+    :pinned "left"}
+   {:field "project_id"
+    :headerName "Project ID"
+    :maxWidth 200}
+   {:headerName "Most Abundant Species"
+    :children [{:field "abundance_1_name" :maxWidth 140 :headerName "Species Name"}
+               {:field "abundance_1_fraction_total_reads" :maxWidth 120 :headerName "Abundance (%)" :filter "agNumberColumnFilter" :type "numericColumn"}]}
+   {:headerName "2nd Most Abundant Species"
+    :children [{:field "abundance_2_name" :maxWidth 140 :headerName "Species Name" :sortable true :resizable true :filter "agTextColumnFilter"}
+               {:field "abundance_2_fraction_total_reads" :maxWidth 120 :headerName "Abundance (%)" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]}
+   {:headerName "3rd Most Abundant Species"
+    :children [{:field "abundance_3_name" :maxWidth 140 :headerName "Species Name" :sortable true :resizable true :filter "agTextColumnFilter"}
+               {:field "abundance_3_fraction_total_reads" :maxWidth 120 :headerName "Abundance (%)" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]}
+   {:headerName "4th Most Abundant Species"
+    :children [{:field "abundance_4_name" :maxWidth 140 :headerName "Species Name" :sortable true :resizable true :filter "agTextColumnFilter"}
+               {:field "abundance_4_fraction_total_reads" :maxWidth 120 :headerName "Abundance (%)" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]}
+   {:headerName "5th Most Abundant Species"
+    :children [{:field "abundance_5_name" :maxWidth 140 :headerName "Species Name" :sortable true :resizable true :filter "agTextColumnFilter"}
+               {:field "abundance_5_fraction_total_reads" :maxWidth 120 :headerName "Abundance (%)" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]}
+   {:headerName "Unclassified"
+    :children [{:field "unclassified_fraction_total_reads" :headerName "Abundance (%)" :maxWidth 200 :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]}])
 
-(defn library-species-abundance-table []
-  (let [grid-ref (clj->js {:current nil})
-        currently-selected-run-id (:selected-run-id @db)
+(defn library-species-abundance-table
+  "Species Abundance Table Component"
+  []
+  (let [currently-selected-run-id (:selected-run-id @db)
         selected-run-species-abundance (get-in @db [:species-abundance currently-selected-run-id])
         row-data (->> selected-run-species-abundance
                       (map (fn [x] (update x :abundance_1_fraction_total_reads #(.toFixed (* 100 %) 2))))
@@ -174,47 +253,27 @@
                       (map (fn [x] (update x :abundance_5_fraction_total_reads #(.toFixed (* 100 %) 2))))
                       (map (fn [x] (update x :unclassified_fraction_total_reads #(.toFixed (* 100 %) 2))))
                       )]
-    [:div {:style {:display "grid"
-                   :grid-template-columns "1fr"
-                   :grid-template-rows "11fr 1fr"}}
      [:div {:class "ag-theme-balham"
-            :style {:grid-row "1"}}
-      [:> ag-grid/AgGridReact
-       {:ref grid-ref
+            :style {}}
+      [ag-grid-react
+       {:defaultColDef {:sortable  true
+                        :resizable true
+                        :minWidth  80
+                        :maxWidth 200}
+        :columnDefs library-species-abundance-column-defs
         :rowData row-data
+        :getRowId (fn [params]
+                   (let [^js data (.-data params)]
+                     (.-library_id data)))
         :pagination false
+        :theme "legacy"
         :enableCellTextSelection true
-       :onFirstDataRendered #(-> % .-api .sizeColumnsToFit)
-        :onSelectionChanged #()
-        }
-       [:> ag-grid/AgGridColumn {:field "library_id" :headerName "Library ID" :maxWidth 200 :sortable true :resizable true :filter "agTextColumnFilter" :pinned "left" :checkboxSelection false :headerCheckboxSelectionFilteredOnly true}]
-       [:> ag-grid/AgGridColumn {:field "project_id" :headerName "Project ID" :maxWidth 200 :sortable true :resizable true :filter "agTextColumnFilter"}]
-       [:> ag-grid/AgGridColumn {:headerName "Most Abundant Species"}
-        [:> ag-grid/AgGridColumn {:field "abundance_1_name" :maxWidth 140 :headerName "Species Name" :sortable true :resizable true :filter "agTextColumnFilter"}]
-        [:> ag-grid/AgGridColumn {:field "abundance_1_fraction_total_reads" :maxWidth 120 :headerName "Abundance" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]]
-       [:> ag-grid/AgGridColumn {:headerName "2nd Most Abundant Species"}
-        [:> ag-grid/AgGridColumn {:field "abundance_2_name" :maxWidth 140 :headerName "Species Name" :sortable true :resizable true :filter "agTextColumnFilter"}]
-        [:> ag-grid/AgGridColumn {:field "abundance_2_fraction_total_reads" :maxWidth 120 :headerName "Abundance (%)" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]]
-       [:> ag-grid/AgGridColumn {:headerName "3rd Most Abundant Species"}
-        [:> ag-grid/AgGridColumn {:field "abundance_3_name" :maxWidth 140 :headerName "Species Name" :sortable true :resizable true :filter "agTextColumnFilter"}]
-        [:> ag-grid/AgGridColumn {:field "abundance_3_fraction_total_reads" :maxWidth 120 :headerName "Abundance (%)" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]]
-       [:> ag-grid/AgGridColumn {:headerName "4th Most Abundant Species"}
-        [:> ag-grid/AgGridColumn {:field "abundance_4_name" :maxWidth 140 :headerName "Species Name" :sortable true :resizable true :filter "agTextColumnFilter"}]
-        [:> ag-grid/AgGridColumn {:field "abundance_4_fraction_total_reads" :maxWidth 120 :headerName "Abundance (%)" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]]
-       [:> ag-grid/AgGridColumn {:headerName "5th Most Abundant Species"}
-       [:> ag-grid/AgGridColumn {:field "abundance_5_name" :maxWidth 140 :headerName "Species Name" :sortable true :resizable true :filter "agTextColumnFilter"}]
-        [:> ag-grid/AgGridColumn {:field "abundance_5_fraction_total_reads" :maxWidth 120 :headerName "Abundance (%)" :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]]
-       [:> ag-grid/AgGridColumn {:headerName "Unclassified"}
-        [:> ag-grid/AgGridColumn {:field "unclassified_fraction_total_reads" :headerName "Abundance (%)" :maxWidth 200 :sortable true :resizable true :filter "agNumberColumnFilter" :type "numericColumn"}]]
-       ]]
-     [:div {:style {:grid-row "2"}}
-      [:button {:onClick #(.exportDataAsCsv (.-api (.-current grid-ref)) (clj->js {:fileName (str currently-selected-run-id "_species_abundance.csv")}))} "Export CSV"]]
-     ]
-    ))
+        :onFirstDataRendered #(-> % .-api .sizeColumnsToFit)
+        :onSelectionChanged #()}
+       ]]))
 
 
-
-(defn nanopore []
+(defn app []
   [:div {:style {:display "grid"
                   :grid-template-columns "1fr 4fr"
                   :grid-template-rows "repeat(2, 1fr)"
@@ -234,21 +293,28 @@
                   :grid-row "2"}}
     [library-species-abundance-table]]])
 
-(defn root []
-  [:div {:style {:display "grid"
-                 :grid-template-columns "1fr"
-                 :grid-gap "4px 4px"}}
-   [header]
-   [nanopore]
-   #_[debug-view]
-   ])
 
-(defn main []
+;;
+
+(defonce root
+  (when (exists? js/document)
+    (rdomc/create-root (.getElementById js/document "app"))))
+
+(defn render
+  "Render the app into the root app div."
+  []
+  (rdomc/render root [app]))
+
+(defn ^:dev/after-load re-render
+  "Hot-reload hook called by shadow-cljs after code changes.
+  Re-renders from root so that new component definitions take effect.
+  State is preserved because it lives in `defonce` app state db atom."
+  []
+  (render))
+
+(defn ^:export init!
+  "Exported entry point called by shadow-cljs on page load."
+  []
+  (.registerModules ModuleRegistry #js [AllCommunityModule])
   (load-sequencing-runs)
-  (rdom/render [root] (js/document.getElementById "app")))
-
-(set! (.-onload js/window) main)
-
-(comment
-
-  )
+  (render))
