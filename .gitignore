@@ -6,4 +6,5 @@
 target
 node_modules
 resources/public/data
+resources/public/css/ag-*.css
 scripts/copy_data.sh
