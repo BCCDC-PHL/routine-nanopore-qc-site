@@ -49,3 +49,16 @@ body {
   font-size: 0.85rem;
   color: var(--text-muted);
 }
+
+/* Run QC pass/fail cell colours (same palette as routine-sequence-qc-site) */
+.ag-theme-balham .qc-pass {
+  background-color: #6ade8a;
+}
+
+.ag-theme-balham .qc-fail {
+  background-color: #e6675e;
+}
+
+.ag-theme-balham .qc-undetermined {
+  background-color: #919191;
+}

@@ -1,6 +1,7 @@
 (ns routine-nanopore-qc.components
   (:require [reagent.core :as r]
             [cljs.pprint :refer [pprint]]
+            [goog.object :as gobj]
             [routine-nanopore-qc.state :refer [db]]
             [routine-nanopore-qc.loaders :as loaders]
             [routine-nanopore-qc.grid :as grid]))
@@ -73,26 +74,83 @@
     (loaders/load-species-abundance currently-selected-run-id)
     (swap! db assoc-in [:selected-run-id] currently-selected-run-id)))
 
+(defn index-qc-metrics
+  "Add `:qc_metrics` to `run`: its `:checked_metrics` as a map keyed by
+  metric name, e.g. {\"ReadN50\" {:metric \"ReadN50\" :value 10248 ...}}.
+  This lets grid columns refer to a metric with a field path such as
+  \"qc_metrics.ReadN50.value\". Runs without QC checks are unchanged."
+  [run]
+  (if-let [checked-metrics (get-in run [:run_qc_check :checked_metrics])]
+    (assoc run :qc_metrics (into {} (map (juxt :metric identity)) checked-metrics))
+    run))
+
+(def qc-status-class-rules
+  "AG-Grid cellClassRules colouring a QC status cell (PASS / FAIL /
+  UNDETERMINED) via the `qc-*` classes in style.css."
+  {"qc-pass" (fn [^js params] (= "PASS" (.-value params)))
+   "qc-fail" (fn [^js params] (= "FAIL" (.-value params)))
+   "qc-undetermined" (fn [^js params] (= "UNDETERMINED" (.-value params)))})
+
+(def run-qc-metrics
+  "Run-level QC metrics shown in the runs table, in column order.
+  `:metric` is the name used in the run's `:checked_metrics`."
+  [{:metric "PercentReadsPassed"
+    :header-name "% Passed"
+    :description "Percentage of reads that passed basecaller quality filtering"
+    ;; Two decimals, so a value just under the threshold (e.g. 69.98)
+    ;; doesn't display as if it met it (70.0).
+    :format #(.toFixed % 2)
+    :unit "%"}
+   {:metric "NumReadsPassed"
+    :header-name "Num. Passed"
+    :description "Number of reads that passed basecaller quality filtering"
+    :format #(.toLocaleString %)
+    :unit ""}
+   {:metric "ReadN50"
+    :header-name "Read N50"
+    :description "Read length N50 of passed reads"
+    :format #(.toLocaleString %)
+    :unit " bp"}])
+
+(defn qc-metric-column-def
+  "Build a runs table column for one of `run-qc-metrics`. The cell is
+  highlighted if the metric failed QC, and its tooltip shows the
+  threshold that was applied to that run."
+  [{:keys [metric header-name description format unit]}]
+  (let [metric-field (fn [^js params field]
+                       (gobj/getValueByKeys params "data" "qc_metrics" metric field))]
+    {:field (str "qc_metrics." metric ".value")
+     :headerName header-name
+     :headerTooltip description
+     :width 110
+     :type "numericColumn"
+     :filter "agNumberColumnFilter"
+     :valueFormatter (fn [^js params]
+                       (if-some [v (.-value params)] (format v) ""))
+     :tooltipValueGetter (fn [params]
+                           (when-some [threshold (metric-field params "threshold")]
+                             (str "Threshold: " (metric-field params "pass_above_or_below")
+                                  " " threshold unit)))
+     :cellClassRules {"qc-fail" #(= "FAIL" (metric-field % "pass_fail"))}}))
+
 (def nanopore-runs-column-defs
-  [{:field "run_id"
-    :headerName "Run ID"
-    :width 300
-    :minWidth 200
-    :sort "desc"}
-   {:field "run_qc_check_status"
-    :headerName "QC Status"
-    :width 100}
-   {:field "percent_reads_passed"
-    :headerName "% Passed"}
-   {:field "num_reads_passed"
-    :headerName "Num. Passed"}
-   {:field "read_n50"
-    :headerName "Read N50"}])
+  (into [{:field "run_id"
+          :headerName "Run ID"
+          :width 300
+          :minWidth 200
+          :sort "desc"}
+         {:field "run_qc_check.overall_qc_pass_fail"
+          :headerName "QC Status"
+          :headerTooltip "Overall Run QC Status"
+          :width 120
+          :filter "agTextColumnFilter"
+          :cellClassRules qc-status-class-rules}]
+        (map qc-metric-column-def)
+        run-qc-metrics))
 
 (defn nanopore-runs-table []
   (let [runs (:runs @db)
-        row-data (->> runs
-                      identity)]
+        row-data (map index-qc-metrics runs)]
     [:div {:class "ag-theme-balham"
            :style {}}
      [grid/ag-grid-react
@@ -116,6 +174,7 @@
        ;; Size columns to their content rather than to the panel, so that
        ;; widening the panel reveals more columns instead of stretching these.
        :autoSizeStrategy {:type "fitCellContents"}
+       :tooltipShowDelay 300
        :enableCellTextSelection true
        :onSelectionChanged run-selected}]]))
 
