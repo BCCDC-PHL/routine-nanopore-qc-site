@@ -2,9 +2,13 @@
   "name": "routine-nanopore-qc",
   "version": "0.0.0",
   "description": "",
-  "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "postinstall": "cp node_modules/ag-grid-community/styles/ag-grid.css resources/public/css/ag-grid.css && cp node_modules/ag-grid-community/styles/ag-theme-balham.css resources/public/css/ag-theme-balham.css",
+    "dev": "clojure -M:dev -m shadow.cljs.devtools.cli watch app",
+    "release": "clojure -M:dev -m shadow.cljs.devtools.cli release app",
+    "clean": "rm -rf public/js",
+    "test": "clojure -M:dev:test -m shadow.cljs.devtools.cli compile test && node target/test/test.js",
+    "test:watch": "clojure -M:dev:test -m shadow.cljs.devtools.cli watch test"
   },
   "repository": {
     "type": "git",
@@ -18,15 +22,12 @@
   },
   "homepage": "https://github.com/BCCDC-PHL/routine-nanopore-qc-site#readme",
   "devDependencies": {
-    "webpack": "^5.52.1",
-    "webpack-cli": "^4.8.0"
+    "shadow-cljs": "^3.5.7"
   },
   "dependencies": {
-    "ag-charts-community": "^4.0.1",
-    "ag-charts-react": "^4.0.0",
-    "ag-grid-community": "^26.0.0",
-    "ag-grid-react": "^26.0.0",
-    "react": "^17.0.2",
-    "react-dom": "^17.0.2"
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "ag-grid-community": "^35.0.1",
+    "ag-grid-react": "^35.0.1"
   }
 }
